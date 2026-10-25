@@ -82,18 +82,18 @@ Being clear about limits saves you time. CoverUp does **not**:
 
 ### 1. Install the plugin
 
-From Picard: **Options > Plugins > Install plugin…** and give it the repository address `https://github.com/alwynpinto/picard-coverup`.
+From Picard: **Options > Plugins > Install plugin…** and give it the repository address `https://github.com/herculepirate/picard-coverup`.
 
 From a terminal:
 
 ```
-picard-cli plugins install https://github.com/alwynpinto/picard-coverup
+picard-cli plugins install https://github.com/herculepirate/picard-coverup
 ```
 
 Flatpak Picard:
 
 ```
-flatpak run --command=picard-cli org.musicbrainz.Picard plugins install https://github.com/alwynpinto/picard-coverup
+flatpak run --command=picard-cli org.musicbrainz.Picard plugins install https://github.com/herculepirate/picard-coverup
 ```
 
 Restart Picard. Right-click an album: you should see the three **CoverUp** entries. Plugins live in `~/.var/app/org.musicbrainz.Picard/data/MusicBrainz/Picard/plugins3/` on Flatpak.
