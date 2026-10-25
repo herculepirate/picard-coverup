@@ -67,6 +67,21 @@ SECRET_KEYS = (
     "lastfm_api_key",
     "websearch_api_key",
     "ai_api_key",
+    "ai_cf_account_id",
+    "ai_cf_api_token",
+    "ai_horde_api_key",
+)
+
+# Public keys that are safe to show and pointless to mask
+PUBLIC_KEYS = {"123": "public test key", "0000000000": "anonymous key"}
+
+# Cloudflare Workers AI text-to-image models offered in Options (any other model ID can be typed in)
+CLOUDFLARE_MODELS = (
+    ("@cf/black-forest-labs/flux-1-schnell", "FLUX.1 schnell (fast, cheapest)"),
+    ("@cf/stabilityai/stable-diffusion-xl-base-1.0", "Stable Diffusion XL base 1.0"),
+    ("@cf/bytedance/stable-diffusion-xl-lightning", "SDXL Lightning (ByteDance)"),
+    ("@cf/leonardo/lucid-origin", "Leonardo Lucid Origin (costly: over 2,000 neurons a cover)"),
+    ("@cf/leonardo/phoenix-1.0", "Leonardo Phoenix 1.0 (costly: over 2,000 neurons a cover)"),
 )
 
 DEFAULTS: dict[str, Any] = {
@@ -145,7 +160,7 @@ DEFAULTS: dict[str, Any] = {
     "creative_overlay_title": True,
     "creative_logo_position": "top",  # top | center | bottom
     "creative_max_per_run": 20,
-    "ai_backend": "none",  # none | automatic1111 | openai | custom
+    "ai_backend": "none",  # none | automatic1111 | openai | custom | cloudflare | aihorde
     "ai_url": "http://127.0.0.1:7860",
     "ai_model": "",
     "ai_api_key": "",
@@ -154,6 +169,15 @@ DEFAULTS: dict[str, Any] = {
     "ai_img2img": False,  # send the low-resolution cover as a reference (local backends only by default)
     "ai_allow_remote_reference": False,
     "ai_consented_hosts": [],
+    # Cloudflare Workers AI (free daily allowance on a free Cloudflare account)
+    "ai_cf_account_id": "",
+    "ai_cf_api_token": "",
+    "ai_cf_model": "@cf/black-forest-labs/flux-1-schnell",
+    "ai_cf_steps": 4,  # FLUX.1 schnell allows 1..8
+    # AI Horde (crowdsourced; the anonymous key works, a registered key gets priority)
+    "ai_horde_api_key": "0000000000",
+    "ai_horde_model": "AlbedoBase XL (SDXL)",
+    "ai_horde_max_wait": 300,  # seconds before the request is cancelled
     "logo_choices": "{}",  # JSON text: artist MBID -> chosen logo URL (text keeps Picard's config simple)
     # ---- logging ----
     "log_mode": "fixed",  # fixed | total | age | session | off
@@ -267,7 +291,7 @@ class Settings:
         return [p for p in order if p in enabled]
 
     def secrets(self) -> list[str]:
-        return [str(self.values[k]) for k in SECRET_KEYS if self.values.get(k) and str(self.values[k]) != "123"]
+        return [str(self.values[k]) for k in SECRET_KEYS if self.values.get(k) and str(self.values[k]) not in PUBLIC_KEYS]
 
     def name_template(self, art_type: ArtType) -> str:
         key = ART_TYPE_NAME_KEY.get(art_type)
@@ -324,7 +348,7 @@ class Settings:
         out = {}
         for k, v in self.values.items():
             if k in SECRET_KEYS:
-                out[k] = "***set***" if v and v != "123" else ("public test key" if v == "123" else "***unset***")
+                out[k] = PUBLIC_KEYS.get(str(v)) or ("***set***" if v else "***unset***")
             else:
                 out[k] = v
         return out

@@ -72,5 +72,5 @@ def test_enable_registers_everything_and_logs(tmp_path, monkeypatch, qapp):
     finally:
         coverup.disable()
     log_file = tmp_path / "cache" / "coverup" / "logs" / "coverup.log"
-    assert "CoverUp 0.5.1 starting" in log_file.read_text(encoding="utf-8")
+    assert "CoverUp 0.6.0 starting" in log_file.read_text(encoding="utf-8")
     assert ("warning", "CoverUp: forward me") in api.records

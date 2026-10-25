@@ -41,7 +41,7 @@ from PyQt6.QtWidgets import (
 )
 
 from ..apply.files import FOLDER_PRESETS, validate_folder_name
-from ..settings import DEFAULTS, EMBED_CHOICES, NAMING_PRESETS, PROVIDER_LABELS, PROVIDERS
+from ..settings import CLOUDFLARE_MODELS, DEFAULTS, EMBED_CHOICES, NAMING_PRESETS, PROVIDER_LABELS, PROVIDERS
 
 log = logging.getLogger("coverup.ui")
 
@@ -53,7 +53,8 @@ NO_FILES = "__none__"
 
 # A field: (key, label, kind, options, help)
 #   kinds: bool, int, float, text, password, choice, radio, multi, order, template,
-#          embed (embed + embed_types), folder (save_files + folder_mode + folder_name), providers
+#          embed (embed + embed_types), folder (save_files + folder_mode + folder_name), providers,
+#          suggest (editable combo: pick a suggested value or type your own; options are (value, tooltip))
 #   int/float options: (min, max, suffix)
 H = "heading"
 LAYOUT: dict[str, list[tuple]] = {
@@ -136,11 +137,20 @@ LAYOUT: dict[str, list[tuple]] = {
         ("creative_variations", "Versions per click", "int", (1, 8, ""), None),
         ("creative_max_per_run", "Most covers per Auto-apply run", "int", (0, 1000, ""), None),
         (H, "AI image service"),
-        ("ai_backend", "Service", "choice", C(("none", "None: use the built-in renderer"), ("automatic1111", "Stable Diffusion on this computer (AUTOMATIC1111)"), ("openai", "OpenAI-compatible images API"), ("custom", "Other (custom HTTP endpoint)")), "Services outside this computer receive the artist, album, year and genre, and ask for your consent first."),
+        ("ai_backend", "Service", "choice", C(("none", "None: use the built-in renderer"), ("automatic1111", "Stable Diffusion on this computer (AUTOMATIC1111)"), ("openai", "OpenAI-compatible images API"), ("custom", "Other (custom HTTP endpoint)"), ("cloudflare", "Cloudflare Workers AI (free daily allowance)"), ("aihorde", "AI Horde (free, run by volunteers)")), "Services outside this computer receive the artist, album, year and genre, and ask for your consent first."),
         ("ai_url", "Address", "text", None, None),
         ("ai_model", "Model", "text", None, "Optional."),
         ("ai_api_key", "API key", "password", None, None),
-        ("ai_size", "Image size", "int", (256, 2048, " px"), None),
+        ("ai_cf_account_id", "Account ID", "text", None, "Needs a free Cloudflare account. The dashboard's Workers AI page (Use REST API) shows your account ID."),
+        ("ai_cf_api_token", "API token", "password", None, "Create it on the same page (Create a Workers AI API Token). It is stored like your other keys and never written to the log."),
+        ("ai_cf_model", "Model", "suggest", CLOUDFLARE_MODELS,
+         "Free allowance: 10,000 neurons a day. FLUX.1 schnell at 1024×1024 costs about 58 neurons, so about 170 covers a day are free; "
+         "the Leonardo models cost far more. You can also type any other Workers AI text-to-image model ID."),
+        ("ai_cf_steps", "Steps", "int", (1, 50, ""), "FLUX.1 schnell takes up to 8 (4 is its default), the SDXL models up to 20. Larger values are lowered to what the model allows."),
+        ("ai_horde_api_key", "API key", "password", None, "0000000000 is the anonymous key and works without an account. A free registered key (aihorde.net/register) gets priority in the queue."),
+        ("ai_horde_model", "Model", "text", None, "Any image model the Horde lists, for example AlbedoBase XL (SDXL). Covers are made on volunteers' computers, so expect a short queue."),
+        ("ai_horde_max_wait", "Give up after", "int", (30, 3600, " s"), "The request is cancelled if no volunteer has finished it by then."),
+        ("ai_size", "Image size", "int", (256, 2048, " px"), "AI Horde rounds it to a multiple of 64 (512 to 1024 px with the anonymous key). FLUX.1 schnell chooses its own size."),
         ("ai_steps", "Steps", "int", (1, 150, ""), "Stable Diffusion only."),
         ("ai_img2img", "Base new covers on the current low-resolution cover", "bool", None, None),
         ("ai_allow_remote_reference", "Allow sending that cover to services outside this computer", "bool", None, None),
@@ -190,7 +200,16 @@ NAME_KEYS = list(NAMING_PRESETS["default"])
 ZERO_TEXT = {"embed_max_side": "Full size", "file_max_side": "Original size", "max_side": "No limit", "http_cache_hours": "Don't remember",
              "min_front": "Any size", "min_back": "Any size", "min_disc": "Any size", "min_booklet": "Any size", "min_artist": "Any size",
              "apply_min_side": "Any size", "creative_max_per_run": "None"}
-AI_KEYS = ("ai_url", "ai_model", "ai_api_key", "ai_size", "ai_steps", "ai_img2img", "ai_allow_remote_reference")
+# The AI fields each service uses. Fields of other services are hidden; with no service the shared ones show greyed out.
+_AI_GENERIC = ("ai_url", "ai_model", "ai_api_key", "ai_size", "ai_steps", "ai_img2img", "ai_allow_remote_reference")
+AI_FIELDS = {
+    "automatic1111": _AI_GENERIC,
+    "openai": _AI_GENERIC,
+    "custom": _AI_GENERIC,
+    "cloudflare": ("ai_cf_account_id", "ai_cf_api_token", "ai_cf_model", "ai_cf_steps", "ai_size"),
+    "aihorde": ("ai_horde_api_key", "ai_horde_model", "ai_horde_max_wait", "ai_size"),
+}
+AI_KEYS = tuple(dict.fromkeys(k for keys in AI_FIELDS.values() for k in keys))
 
 
 def _help(text: str) -> QLabel:
@@ -251,6 +270,7 @@ def _make_options_page_class(base):
             super().__init__(parent)
             self.widgets: dict[str, tuple[str, object]] = {}
             self.rows: dict[str, list[QWidget]] = {}
+            self.cells: dict[str, tuple[QFormLayout, QWidget]] = {}
             self._custom_names = {k: str(DEFAULTS[k]) for k in NAME_KEYS}
             outer = QVBoxLayout(self)
             outer.setContentsMargins(0, 0, 0, 0)
@@ -309,7 +329,7 @@ def _make_options_page_class(base):
                 cell_lay.addWidget(h)
                 row.append(h)
                 help_text = None
-            if kind in ("int", "float", "choice", "order", "template", "embed"):
+            if kind in ("int", "float", "choice", "order", "template", "embed", "suggest"):
                 line = QHBoxLayout()
                 line.addWidget(w)
                 line.addStretch(1)
@@ -332,6 +352,7 @@ def _make_options_page_class(base):
                 form.addRow(lab, cell)
                 row.append(lab)
             self.rows[key] = row
+            self.cells[key] = (form, cell)
 
         def _buttons(self, buttons) -> QHBoxLayout:
             row = QHBoxLayout()
@@ -368,6 +389,15 @@ def _make_options_page_class(base):
             if kind == "radio":
                 horizontal = all(len(str(lbl)) <= 24 for _v, lbl in opt)
                 return _Radio(opt, horizontal)
+            if kind == "suggest":
+                w = QComboBox()
+                w.setEditable(True)
+                w.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
+                w.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToContents)
+                for value, tip in opt:
+                    w.addItem(value, value)
+                    w.setItemData(w.count() - 1, tip, Qt.ItemDataRole.ToolTipRole)
+                return w
             if kind in ("choice", "order", "template", "embed"):
                 w = QComboBox()
                 w.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToContents)
@@ -427,6 +457,16 @@ def _make_options_page_class(base):
             for w in self.rows.get(key, []):
                 w.setEnabled(enabled)
 
+        def _visible(self, key: str, visible: bool) -> None:
+            form, cell = self.cells[key]
+            if hasattr(form, "setRowVisible"):  # Qt 6.4+
+                form.setRowVisible(cell, visible)
+            else:
+                cell.setVisible(visible)
+                for w in self.rows.get(key, []):
+                    if isinstance(w, QLabel) and w.parent() is not cell:
+                        w.setVisible(visible)
+
         def _preset_changed(self, *_):
             preset = self.widgets["naming_preset"][1].currentData()
             if getattr(self, "_last_preset", None) == "custom":
@@ -455,9 +495,11 @@ def _make_options_page_class(base):
                 self._show(k, artist_on)
             self._show("target_size", self.widgets["prefer_largest"][1].value() is False)
             self._show("creative_custom_prompt", self.widgets["creative_template"][1].currentData() == "custom")
-            ai_on = self.widgets["ai_backend"][1].currentData() != "none"
+            fields = AI_FIELDS.get(self.widgets["ai_backend"][1].currentData(), ())
+            shown = fields or _AI_GENERIC
             for k in AI_KEYS:
-                self._show(k, ai_on)
+                self._visible(k, k in shown)
+                self._show(k, k in fields)
 
         # ---- config ----
         def _cfg(self):
@@ -517,6 +559,8 @@ def _make_options_page_class(base):
                     w.set_value(v)
                 elif kind in ("choice", "template"):
                     w.setCurrentIndex(max(0, w.findData(v)))
+                elif kind == "suggest":
+                    w.setEditText(str(v))
                 elif kind == "order":
                     w.setCurrentIndex(max(0, w.findData(",".join(v) if isinstance(v, (list, tuple)) else str(v))))
                 elif kind == "multi":
@@ -580,6 +624,8 @@ def _make_options_page_class(base):
                     v = w.value()
                 elif kind in ("choice", "template"):
                     v = w.currentData()
+                elif kind == "suggest":
+                    v = w.currentText().strip() or DEFAULTS[key]
                 elif kind == "order":
                     v = [x for x in str(w.currentData()).split(",") if x]
                 elif kind == "multi":

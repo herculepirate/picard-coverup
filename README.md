@@ -2,7 +2,7 @@
 
 Find, compare and apply album artwork from many sources, as tags embedded in your music files, as image files in a folder you name, or both.
 
-**Version 0.5.1 · Needs MusicBrainz Picard 3.0 or newer · Python 3.10+ · GPL-2.0-or-later**
+**Version 0.6.0 · Needs MusicBrainz Picard 3.0 or newer · Python 3.10+ · GPL-2.0-or-later**
 
 ---
 
@@ -44,7 +44,7 @@ CoverUp asks many sources at once, tells you how sure it is (exact release, same
 - **Your own scans, edited in place.** Every JPG, PNG and TIFF in the album folder (and its sub-folders) is offered in the Front, Back and Disc tabs, whatever it is called. **Rotate left**, **Rotate right** and **Crop…** make an edited JPEG copy without touching the original.
 - **Review window.** Large preview, comparison with your current cover, plain-language labels, double-click to apply one image, paste or drag in a picture you found yourself, and a **Search the web** menu that opens image searches in your browser, pre-filled with artist, album, year and edition.
 - **Works from Picard's own cover art lookup.** CoverUp can be ticked in Options > Cover Art like the built-in providers.
-- **Creative fallback (off by default).** When no real cover exists, make one: fan art, your own AI image service, or an offline renderer. Always labelled as generated.
+- **Creative fallback (off by default).** When no real cover exists, make one: fan art, an AI image service (your own, or the free Cloudflare Workers AI or AI Horde), or an offline renderer. Always labelled as generated.
 - **Troubleshooting built in.** A log file with API keys masked and a one-click redacted diagnostics bundle.
 
 ## What CoverUp cannot do
@@ -66,7 +66,7 @@ Being clear about limits saves you time. CoverUp does **not**:
 | Give artist images to compilations | Albums by *Various Artists* never get artist images. |
 | Use Picard's proxy and network settings | CoverUp makes its own requests with Python's standard library. A proxy is read from the `HTTPS_PROXY` environment variable. |
 | Undo a change in your tags after you save | **Undo last apply** reverses files CoverUp wrote. Embedded images can be changed until you save; before that, remove and reload the album to drop them. After saving, re-apply the old cover. |
-| Bundle or host an AI model | Nothing is included or hosted. You provide a service (local Stable Diffusion, an OpenAI-compatible API or a custom endpoint). |
+| Bundle or host an AI model | Nothing is included or hosted. You choose a service: local Stable Diffusion, an OpenAI-compatible API, a custom endpoint, or one of two free ones, Cloudflare Workers AI (free account, daily allowance) and AI Horde (volunteers' computers, no account needed). |
 | Guarantee every source works today | Source responses were tested against fixtures written from each service's documentation and have not all been checked against the live services. AI backends have not been tested against real servers. If a source returns nothing, export diagnostics and report it. |
 | Install through Snap or non-Flatpak packaging specifics | Only the standard Picard 3 plugin installation is described here. Flatpak paths are given; other packages keep plugins elsewhere. |
 
@@ -261,16 +261,29 @@ Make a cover when there is none. **Off by default**; real covers always come fir
 | **Logo position** | Top | Top, Centre or Bottom. |
 | **Versions per click** | 4 | How many alternatives are generated in the review window. |
 | **Most covers per Auto-apply run** | 20 | A safety cap on generated covers per run. `0` = none generated. |
-| **AI image service: Service** | None | *None*, *Stable Diffusion on this computer (AUTOMATIC1111, started with `--api`)*, *OpenAI-compatible images API*, or *Other (custom HTTP endpoint)*. Anything outside your computer receives the artist, album, year and genre, and asks for consent first. |
+| **AI image service: Service** | None | *None*, *Stable Diffusion on this computer (AUTOMATIC1111, started with `--api`)*, *OpenAI-compatible images API*, *Other (custom HTTP endpoint)*, *Cloudflare Workers AI (free daily allowance)* or *AI Horde (free, run by volunteers)*. Only the chosen service's settings are shown. Anything outside your computer receives the artist, album, year and genre, and asks for consent first. |
 | **Address** | `http://127.0.0.1:7860` | The service address. |
 | **Model** | empty | Optional model name. |
 | **API key** | empty | For remote services. Masked in logs. |
 | **Image size** | 1024 px | Size requested from the service. |
 | **Steps** | 30 | Stable Diffusion only. |
+| **Cloudflare: Account ID / API token** | empty | See *Free AI services* below. The token is masked in logs and left out of diagnostics. |
+| **Cloudflare: Model** | `@cf/black-forest-labs/flux-1-schnell` | Pick FLUX.1 schnell, SDXL base 1.0, SDXL Lightning, Leonardo Lucid Origin or Leonardo Phoenix 1.0, or type any other Workers AI text-to-image model ID. |
+| **Cloudflare: Steps** | 4 | FLUX.1 schnell takes up to 8, the SDXL models up to 20; larger values are lowered to the model's limit. |
+| **AI Horde: API key** | `0000000000` | The anonymous key works without an account. A free registered key gets priority in the queue. Masked in logs. |
+| **AI Horde: Model** | AlbedoBase XL (SDXL) | Any image model the Horde lists. |
+| **AI Horde: Give up after** | 300 s | The request is cancelled if no volunteer has finished it by then. |
 | **Base new covers on the current low-resolution cover** | Off | Sends your current cover as a reference (img2img). Local services only unless the next option is on. |
 | **Allow sending that cover to services outside this computer** | Off | Needed before the cover goes to a remote service. |
 
 Buttons: **Open my styles folder** and **Ask again before using AI services** (forgets consents).
+
+#### Free AI services
+
+Both are outside your computer, so the first cover asks for your consent (once per service). Neither can base a cover on your current one.
+
+- **Cloudflare Workers AI.** Needs a free Cloudflare account. In the Cloudflare dashboard open **Workers AI** > **Use REST API**: copy the **Account ID**, then **Create a Workers AI API Token** and copy it. Paste both into CoverUp. The free allowance is 10,000 neurons a day. FLUX.1 schnell at 1024×1024 with 4 steps costs about 58 neurons, so about 170 covers a day are free; each version is one request. The Leonardo models cost more than 2,000 neurons a cover. FLUX.1 schnell chooses its own image size; the other models use **Image size**.
+- **AI Horde** ([aihorde.net](https://aihorde.net)). A crowdsourced network of volunteers' computers; free, no account needed. Requests join a queue, so a cover can take from seconds to several minutes, and CoverUp cancels the request after **Give up after**. Image size is rounded to a multiple of 64 (512 to 1024 px with the anonymous key). Covers are requested as safe-for-work. Register at aihorde.net/register for a key with priority. Your prompt is seen by the volunteer whose computer makes the image.
 
 Generated art is always labelled (embedded image comment "Generated by CoverUp…", `coverup.json`, `%_coverup_generated%`), never uploaded anywhere by CoverUp, and never outranks real art except where you switched it on.
 
@@ -359,7 +372,7 @@ Example: tag albums needing attention with `$if($eq(%_coverup_status%,review),ne
 
 ## Logging and diagnostics
 
-CoverUp writes a log for troubleshooting. By default it keeps rotating 2 MB × 3 files. API keys are always masked. On Flatpak: `~/.var/app/org.musicbrainz.Picard/cache/MusicBrainz/Picard/coverup/logs/coverup.log`. The first line of each session reads `CoverUp 0.5.1 starting`, which confirms which version Picard loaded.
+CoverUp writes a log for troubleshooting. By default it keeps rotating 2 MB × 3 files. API keys are always masked. On Flatpak: `~/.var/app/org.musicbrainz.Picard/cache/MusicBrainz/Picard/coverup/logs/coverup.log`. The first line of each session reads `CoverUp 0.6.0 starting`, which confirms which version Picard loaded.
 
 To report a problem: set **Detail** to *Detailed*, reproduce it, then Advanced > **Export diagnostics…** and attach the redacted zip. Turn on *Hide folder paths and album names* first if you want the log anonymised.
 
@@ -369,7 +382,7 @@ To report a problem: set **Detail** to *Detailed*, reproduce it, then Advanced >
 - Requests are rate-limited per host, and results are cached on disk for the time you set.
 - Keys are stored in Picard's configuration, never logged unmasked and never included in diagnostics exports.
 - The **Search the web** menu only opens links in your browser; CoverUp does not read what the search engines return.
-- Generated art stays on your computer. AI services outside your computer require consent per host, and your existing cover is only sent to one if you allow that separately.
+- Generated art stays on your computer. AI services outside your computer require consent per host, and your existing cover is only sent to one if you allow that separately. With AI Horde, the prompt (artist, album, year, genre) is processed by a volunteer's computer.
 - CoverUp has no telemetry and sends nothing to its author.
 
 ## Troubleshooting and FAQ
@@ -378,7 +391,7 @@ To report a problem: set **Detail** to *Detailed*, reproduce it, then Advanced >
 Check Options > Plugins that CoverUp is installed and enabled, and restart Picard. Flatpak users: install with `flatpak run --command=picard-cli org.musicbrainz.Picard plugins install …`.
 
 **The log still says an old version.**
-Update (see below) and fully restart Picard. The first log line of the new session should read `CoverUp 0.5.1 starting`.
+Update (see below) and fully restart Picard. The first log line of the new session should read `CoverUp 0.6.0 starting`.
 
 **Nothing found for an album.**
 Look at the log for per-source lines. Common causes: no Discogs/Fanart.tv key, the album is not matched to a MusicBrainz release (Lookup first), the minimum sizes are too high for obscure releases, or the source is simply down. Lower *Smallest images to consider* and try again.

@@ -295,6 +295,56 @@ def test_options_page_has_an_artists_tab_with_its_own_switches(picard_env, monke
     assert cfg["artist_art"] is False and set(cfg["artist_types"]) == {"thumb", "logo", "banner"} and cfg["min_artist"] == 800
 
 
+def test_options_page_shows_only_the_chosen_ai_services_fields(picard_env, monkeypatch):
+    from unittest.mock import MagicMock, patch
+
+    import coverup
+    from coverup.ui.options_page import _make_options_page_class
+    from picard.plugin3.api import OptionsPage
+
+    monkeypatch.setattr(coverup, "reconfigure_logging", lambda: None)
+    with patch("picard.ui.options.tagger_instance", return_value=MagicMock()):
+        cls = _make_options_page_class(OptionsPage)
+        cls.api = FakeApi(ai_backend="cloudflare", ai_cf_model="@cf/someone/new-model", ai_cf_api_token="tok")
+        page = cls()
+    page.load()
+    w = page.widgets
+
+    def visible(key):
+        form, cell = page.cells[key]
+        return form.isRowVisible(cell) if hasattr(form, "isRowVisible") else not cell.isHidden()
+
+    def on(key):
+        return visible(key) and w[key][1].isEnabled()
+
+    backend = w["ai_backend"][1]
+    assert {backend.itemData(i) for i in range(backend.count())} >= {"none", "automatic1111", "openai", "custom", "cloudflare", "aihorde"}
+    assert all(on(k) for k in ("ai_cf_account_id", "ai_cf_api_token", "ai_cf_model", "ai_cf_steps", "ai_size"))
+    assert not any(visible(k) for k in ("ai_url", "ai_model", "ai_api_key", "ai_steps", "ai_img2img", "ai_horde_api_key", "ai_horde_model"))
+    model = w["ai_cf_model"][1]
+    assert model.currentText() == "@cf/someone/new-model"  # free text survives loading
+    assert model.findText("@cf/stabilityai/stable-diffusion-xl-base-1.0") >= 0 and model.findText("@cf/leonardo/phoenix-1.0") >= 0
+    backend.setCurrentIndex(backend.findData("aihorde"))
+    assert all(on(k) for k in ("ai_horde_api_key", "ai_horde_model", "ai_horde_max_wait", "ai_size"))
+    assert not any(visible(k) for k in ("ai_cf_account_id", "ai_cf_model", "ai_url"))
+    assert w["ai_horde_api_key"][1].text() == "0000000000" and w["ai_horde_max_wait"][1].value() == 300
+    backend.setCurrentIndex(backend.findData("none"))
+    assert visible("ai_url") and not w["ai_url"][1].isEnabled() and not visible("ai_cf_model") and not visible("ai_horde_model")
+    backend.setCurrentIndex(backend.findData("automatic1111"))
+    assert on("ai_url") and on("ai_steps") and not visible("ai_cf_steps")
+    backend.setCurrentIndex(backend.findData("cloudflare"))
+    model.setCurrentIndex(model.findText("@cf/bytedance/stable-diffusion-xl-lightning"))
+    w["ai_cf_account_id"][1].setText("  acct-1 ")
+    w["ai_horde_model"][1].setText("Juggernaut XL")
+    page.save()
+    cfg = cls.api.plugin_config
+    assert cfg["ai_backend"] == "cloudflare" and cfg["ai_cf_model"] == "@cf/bytedance/stable-diffusion-xl-lightning"
+    assert cfg["ai_cf_account_id"] == "acct-1" and cfg["ai_cf_api_token"] == "tok" and cfg["ai_horde_model"] == "Juggernaut XL"
+    model.setEditText("")
+    page.save()
+    assert cfg["ai_cf_model"] == "@cf/black-forest-labs/flux-1-schnell"  # empty falls back to the default
+
+
 def test_local_images_are_offered_everywhere_and_can_be_rotated_and_cropped(picard_env, state, monkeypatch):
     from PyQt6.QtWidgets import QDialog
 

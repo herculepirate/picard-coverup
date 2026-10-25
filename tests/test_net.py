@@ -38,6 +38,25 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _send(self, status, body, ctype):
+        self.send_response(status)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_POST(self):
+        Handler.hits["POST " + self.path] = Handler.hits.get("POST " + self.path, 0) + 1
+        Handler.last_post = self.rfile.read(int(self.headers.get("Content-Length") or 0))
+        if self.path == "/refuse":
+            self._send(403, b'{"message": "Anonymous requests are limited", "rc": "KudosUpfront"}', "application/json")
+        else:
+            self._send(200, b"\x89PNG\r\n\x1a\nfake", "image/png")
+
+    def do_DELETE(self):
+        Handler.hits["DELETE " + self.path] = Handler.hits.get("DELETE " + self.path, 0) + 1
+        self._send(200, b'{"done": false, "generations": []}', "application/json")
+
 
 @pytest.fixture(scope="module")
 def server():
@@ -91,3 +110,27 @@ def test_per_host_rate_limit(server, monkeypatch):
 def test_redact_url():
     assert net.redact_url("https://x/api?api_key=SECRET&q=1") == "https://x/api?api_key=%2A%2A%2A&q=1"
     assert "SECRET" not in net.redact_url("https://www.theaudiodb.com/api/v1/json/SECRET/album-mb.php?i=1")
+    assert "SECRET" not in net.redact_url("https://api.cloudflare.com/client/v4/accounts/SECRET/ai/run/@cf/x/y")
+
+
+def test_raw_post_returns_bytes_and_content_type(server):
+    r = net.HttpClient().post(server + "/img", {"prompt": "p"})
+    assert r.data.startswith(b"\x89PNG") and r.headers["content-type"] == "image/png"
+    assert Handler.last_post == b'{"prompt": "p"}'
+
+
+def test_http_error_keeps_the_api_explanation(server):
+    with pytest.raises(net.HttpError) as e:
+        net.HttpClient(retries=0).post_json(server + "/refuse", {})
+    assert e.value.status == 403 and e.value.api_message() == "Anonymous requests are limited"
+    assert "Anonymous" not in str(e.value)  # the body is not part of the logged message
+
+
+def test_forced_delete_is_sent_even_after_cancel(server):
+    ev = threading.Event()
+    ev.set()
+    c = net.HttpClient(cancel=ev)
+    with pytest.raises(net.Cancelled):
+        c.delete(server + "/job")
+    assert c.delete(server + "/job", force=True).json() == {"done": False, "generations": []}
+    assert Handler.hits["DELETE /job"] == 1

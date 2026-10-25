@@ -38,6 +38,7 @@ HOST_INTERVALS = {
     "ws.audioscrobbler.com": 0.25,
     "api.search.brave.com": 1.1,
     "www.googleapis.com": 0.5,
+    "aihorde.net": 1.0,  # status is cached for 1 s, so polling faster gains nothing
 }
 DEFAULT_INTERVAL = 0.1
 
@@ -49,10 +50,26 @@ class Cancelled(Exception):
 
 
 class HttpError(Exception):
-    def __init__(self, status: int, url: str, message: str = ""):
+    def __init__(self, status: int, url: str, message: str = "", body: bytes = b""):
         super().__init__(f"HTTP {status} for {redact_url(url)} {message}".strip())
         self.status = status
         self.url = url
+        self.body = body  # start of the error response (APIs often explain the refusal there); never logged
+
+    def api_message(self) -> str:
+        """The ``message`` (or first ``errors[].message``) of a JSON error body, if there is one."""
+        try:
+            d = json.loads(self.body.decode("utf-8"))
+        except (ValueError, UnicodeDecodeError):
+            return ""
+        if not isinstance(d, dict):
+            return ""
+        if isinstance(d.get("message"), str):
+            return d["message"]
+        for e in d.get("errors") or []:
+            if isinstance(e, dict) and isinstance(e.get("message"), str):
+                return e["message"]
+        return ""
 
 
 _SECRET_PARAMS = {"api_key", "apikey", "key", "token", "client_key", "access_token", "client_secret"}
@@ -69,6 +86,11 @@ def redact_url(url: str) -> str:
             head, _, rest = path.partition("/api/v1/json/")
             _key, _, tail = rest.partition("/")
             path = f"{head}/api/v1/json/***/{tail}"
+        # Cloudflare puts the account ID in the path: /client/v4/accounts/<id>/...
+        if "/client/v4/accounts/" in path:
+            head, _, rest = path.partition("/client/v4/accounts/")
+            _acct, _, tail = rest.partition("/")
+            path = f"{head}/client/v4/accounts/***/{tail}"
         return urllib.parse.urlunsplit((parts.scheme, parts.netloc, path, urllib.parse.urlencode(q), ""))
     except Exception:
         return "<url>"
@@ -96,6 +118,7 @@ class HttpClient:
         retries: int = 2,
         cancel: threading.Event | None = None,
     ):
+        self.version = version
         self.user_agent = USER_AGENT.format(version=version)
         self.cache_dir = Path(cache_dir) if cache_dir else None
         self.cache_seconds = max(0.0, cache_hours * 3600)
@@ -108,7 +131,7 @@ class HttpClient:
         self.stats = {"requests": 0, "cache_hits": 0, "errors": 0}
 
     # ---- rate limiting ----
-    def _wait_turn(self, host: str) -> None:
+    def _wait_turn(self, host: str, force: bool = False) -> None:
         with self._global:
             lock = self._host_locks.setdefault(host, threading.Lock())
         with lock:
@@ -117,7 +140,10 @@ class HttpClient:
             wait = self._host_next.get(host, 0.0) - now
             if wait > 0:
                 log.log(5, "Rate limit: waiting %.2fs for %s", wait, host)
-                self._sleep(wait)
+                if force:
+                    time.sleep(wait)
+                else:
+                    self._sleep(wait)
             self._host_next[host] = time.monotonic() + interval
 
     def _sleep(self, seconds: float) -> None:
@@ -189,21 +215,33 @@ class HttpClient:
         return self.get(url, h, cache=cache).json()
 
     def post_json(self, url: str, payload: Any, headers: dict[str, str] | None = None, timeout: float | None = None) -> Any:
-        hdrs = {"User-Agent": self.user_agent, "Content-Type": "application/json", "Accept": "application/json"}
+        return self.post(url, payload, {"Accept": "application/json", **(headers or {})}, timeout=timeout).json()
+
+    def post(self, url: str, payload: Any, headers: dict[str, str] | None = None, timeout: float | None = None) -> Response:
+        """POST ``payload`` as JSON and return the raw response (for APIs that answer with image bytes)."""
+        hdrs = {"User-Agent": self.user_agent, "Content-Type": "application/json", "Accept": "*/*"}
         if headers:
             hdrs.update(headers)
         body = json.dumps(payload).encode("utf-8")
-        resp = self._request("POST", url, hdrs, body, MAX_BYTES * 2, timeout=timeout)
-        return resp.json()
+        return self._request("POST", url, hdrs, body, MAX_BYTES * 2, timeout=timeout)
+
+    def delete(self, url: str, headers: dict[str, str] | None = None, timeout: float | None = None, force: bool = False) -> Response:
+        """DELETE ``url``. ``force`` sends it even after the run was cancelled (to clean up a remote job), once, without retries."""
+        hdrs = {"User-Agent": self.user_agent, "Accept": "application/json"}
+        if headers:
+            hdrs.update(headers)
+        return self._request("DELETE", url, hdrs, None, MAX_BYTES, timeout=timeout, force=force)
 
     def _request(
-        self, method: str, url: str, headers: dict[str, str], body: bytes | None, max_bytes: int, timeout: float | None = None
+        self, method: str, url: str, headers: dict[str, str], body: bytes | None, max_bytes: int, timeout: float | None = None,
+        force: bool = False,
     ) -> Response:
         host = urllib.parse.urlsplit(url).hostname or ""
         attempt = 0
+        retries = 0 if force else self.retries
         while True:
-            self._wait_turn(host)
-            if self.cancel.is_set():
+            self._wait_turn(host, force)
+            if self.cancel.is_set() and not force:
                 raise Cancelled()
             started = time.monotonic()
             self.stats["requests"] += 1
@@ -221,19 +259,23 @@ class HttpClient:
             except urllib.error.HTTPError as e:
                 status = e.code
                 retry_after = e.headers.get("Retry-After") if e.headers else None
+                try:
+                    err_body = e.read(4096) or b""
+                except Exception:
+                    err_body = b""
                 log.debug("%s %s -> HTTP %s (%.2fs)", method, redact_url(url), status, time.monotonic() - started)
-                if status in (429, 500, 502, 503, 504) and attempt < self.retries:
+                if status in (429, 500, 502, 503, 504) and attempt < retries:
                     attempt += 1
                     delay = _retry_delay(retry_after, attempt)
                     log.info("Retrying %s after HTTP %s in %.1fs", redact_url(url), status, delay)
                     self._sleep(delay)
                     continue
                 self.stats["errors"] += 1
-                raise HttpError(status, url) from None
+                raise HttpError(status, url, body=err_body) from None
             except (urllib.error.URLError, TimeoutError, ConnectionError, OSError) as e:
                 if isinstance(e, HttpError):
                     raise
-                if attempt < self.retries:
+                if attempt < retries:
                     attempt += 1
                     delay = _retry_delay(None, attempt)
                     log.info("Retrying %s after network error (%s) in %.1fs", redact_url(url), e, delay)
