@@ -4,6 +4,7 @@ and the switch that turns them off. Fixtures follow each API's documented respon
 import pytest
 
 from coverup.model import ArtType, Query, Tier
+from coverup.net import HttpError
 from coverup.providers.base import is_various
 from coverup.providers.discogs import parse_artist_images
 from coverup.providers.stores import Deezer, parse_deezer_artist
@@ -100,9 +101,15 @@ def test_wikimedia_needs_an_artist_mbid_and_respects_the_switch_and_compilations
     assert is_various("Various Artists") and is_various("various") and not is_various("Various Cruelties")
 
 
-def test_wikimedia_survives_a_failing_service():
+def test_wikimedia_reports_a_failing_service_as_an_error_not_as_nothing_found():
     http = FakeHttp({f"https://musicbrainz.org/ws/2/artist/{ART}": 503})
-    assert Wikimedia(http, Settings.from_mapping({})).search(Q) == []
+    with pytest.raises(HttpError):                 # (the run says "error", never "0 found")
+        Wikimedia(http, Settings.from_mapping({})).search(Q)
+    assert Wikimedia(FakeHttp({}), Settings.from_mapping({})).search(Q) == []      # (404: no such artist)
+    routes = wiki_routes()
+    routes["https://commons.wikimedia.org/w/api.php"] = 503
+    with pytest.raises(HttpError):                 # (every Commons file failed)
+        Wikimedia(FakeHttp(routes), Settings.from_mapping({})).search(Q)
     routes = wiki_routes()
     routes["https://www.wikidata.org/wiki/Special:EntityData/Q2306.json"] = 500
     got = Wikimedia(FakeHttp(routes), Settings.from_mapping({})).search(Q)
@@ -155,3 +162,14 @@ def test_fanart_and_audiodb_skip_artist_requests_when_switched_off(provider):
     s = Settings.from_mapping({"artist_art": False, "fanart_api_key": "k", "audiodb_api_key": "123"})
     REGISTRY[provider](http, s).search(Query(artist="A", album="B", artist_mbid=ART))
     assert not any(ART in u for u in http.calls)
+
+
+def test_discogs_outage_is_an_error_not_nothing_found():
+    from coverup.providers.discogs import API, Discogs
+    s = Settings.from_mapping({"discogs_token": "t"})
+    q = Query(artist="Pink Floyd", album="Animals", barcode="0123", discogs_release_id=99)
+    routes = {f"{API}/releases/99": 503, f"{API}/database/search": {"results": [{"id": 7}]}, f"{API}/releases/7": 502}
+    with pytest.raises(HttpError):
+        Discogs(FakeHttp(routes), s).search(q)
+    routes = {f"{API}/releases/99": 404, f"{API}/database/search": {"results": []}}
+    assert Discogs(FakeHttp(routes), s).search(q) == []          # (really nothing there)

@@ -137,12 +137,17 @@ class Discogs(Provider):
         return (self.http.get_json(url, self._headers()) or {}).get("results") or []
 
     def find_release(self, q: Query) -> tuple[dict | None, float, str]:
-        """Return (release JSON, confidence, how it was found)."""
+        """Return (release JSON, confidence, how it was found). When nothing is found because
+        Discogs failed (not "not found"), the failure is raised: an outage is reported as an
+        error, never as "0 found"."""
+        failed: HttpError | None = None
         if q.discogs_release_id:
             try:
                 return self.release(q.discogs_release_id), 1.0, "MusicBrainz URL relationship"
             except HttpError as exc:
                 self.log.warning("Linked Discogs release %s failed: %s", q.discogs_release_id, exc)
+                if exc.status != 404:
+                    failed = exc
         attempts = []
         if q.barcode:
             attempts.append(("barcode", {"barcode": _digits(q.barcode)}))
@@ -155,7 +160,11 @@ class Discogs(Provider):
             for hit in self._search(**params)[:5]:
                 try:
                     rel = self.release(hit["id"])
-                except (HttpError, KeyError):
+                except KeyError:
+                    continue
+                except HttpError as exc:
+                    if exc.status != 404:
+                        failed = exc
                     continue
                 conf, reasons = release_confidence(q, rel)
                 self.log.debug("Discogs candidate %s via %s: confidence %.2f (%s)", hit.get("id"), how, conf, "; ".join(reasons))
@@ -165,6 +174,8 @@ class Discogs(Provider):
                     return best
             if best[1] >= CONFIDENT:
                 return best
+        if best[0] is None and failed is not None:
+            raise failed
         return best
 
     def search(self, q: Query) -> list[Candidate]:

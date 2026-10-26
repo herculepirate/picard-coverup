@@ -2,7 +2,7 @@
 
 Find, compare and apply album artwork from many sources, as tags embedded in your music files, as image files in a folder you name, or both.
 
-**Version 0.6.0 · Needs MusicBrainz Picard 3.0 or newer · Python 3.10+ · GPL-2.0-or-later**
+**Version 0.6.1 · Needs MusicBrainz Picard 3.0 or newer · Python 3.10+ · GPL-2.0-or-later**
 
 ---
 
@@ -372,7 +372,7 @@ Example: tag albums needing attention with `$if($eq(%_coverup_status%,review),ne
 
 ## Logging and diagnostics
 
-CoverUp writes a log for troubleshooting. By default it keeps rotating 2 MB × 3 files. API keys are always masked. On Flatpak: `~/.var/app/org.musicbrainz.Picard/cache/MusicBrainz/Picard/coverup/logs/coverup.log`. The first line of each session reads `CoverUp 0.6.0 starting`, which confirms which version Picard loaded.
+CoverUp writes a log for troubleshooting. By default it keeps rotating 2 MB × 3 files. API keys are always masked. On Flatpak: `~/.var/app/org.musicbrainz.Picard/cache/MusicBrainz/Picard/coverup/logs/coverup.log`. The first line of each session reads `CoverUp 0.6.1 starting`, which confirms which version Picard loaded.
 
 To report a problem: set **Detail** to *Detailed*, reproduce it, then Advanced > **Export diagnostics…** and attach the redacted zip. Turn on *Hide folder paths and album names* first if you want the log anonymised.
 
@@ -391,7 +391,7 @@ To report a problem: set **Detail** to *Detailed*, reproduce it, then Advanced >
 Check Options > Plugins that CoverUp is installed and enabled, and restart Picard. Flatpak users: install with `flatpak run --command=picard-cli org.musicbrainz.Picard plugins install …`.
 
 **The log still says an old version.**
-Update (see below) and fully restart Picard. The first log line of the new session should read `CoverUp 0.6.0 starting`.
+Update (see below) and fully restart Picard. The first log line of the new session should read `CoverUp 0.6.1 starting`.
 
 **Nothing found for an album.**
 Look at the log for per-source lines. Common causes: no Discogs/Fanart.tv key, the album is not matched to a MusicBrainz release (Lookup first), the minimum sizes are too high for obscure releases, or the source is simply down. Lower *Smallest images to consider* and try again.

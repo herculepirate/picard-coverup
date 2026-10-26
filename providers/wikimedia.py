@@ -121,17 +121,24 @@ class Wikimedia(Provider):
     def search(self, q: Query) -> list[Candidate]:
         if not self.wants_artist_art(q) or not is_mbid(q.artist_mbid):
             return []
+        # A service that fails (not "not found") is raised, so the run reports an error for this
+        # source instead of "0 found" - an outage must never look like an artist without photos
+        failed: HttpError | None = None
         try:
             qid, linked_files = relations(self.http.get_json(MB_ARTIST.format(mbid=q.artist_mbid)))
-            wanted: list[tuple[str, ArtType, float]] = [(f, ArtType.ARTIST_THUMB, 0.8) for f in linked_files]
-            if qid:
-                try:
-                    wanted += claim_files(self.http.get_json(WIKIDATA.format(qid=qid)), qid)
-                except HttpError as exc:
-                    self.log.warning("Wikidata %s failed: %s", qid, exc)
         except HttpError as exc:
-            self.log.warning("MusicBrainz artist links failed: %s", exc)
-            return []
+            if exc.status == 404:
+                self.log.info("MusicBrainz has no artist %s", q.artist_mbid)
+                return []
+            raise
+        wanted: list[tuple[str, ArtType, float]] = [(f, ArtType.ARTIST_THUMB, 0.8) for f in linked_files]
+        if qid:
+            try:
+                wanted += claim_files(self.http.get_json(WIKIDATA.format(qid=qid)), qid)
+            except HttpError as exc:
+                self.log.warning("Wikidata %s failed: %s", qid, exc)
+                if exc.status != 404:
+                    failed = exc
         out: list[Candidate] = []
         seen: set[str] = set()
         for filename, art, conf in wanted:
@@ -142,8 +149,12 @@ class Wikimedia(Provider):
                 c = parse_imageinfo(self._imageinfo(filename), filename, art, conf)
             except HttpError as exc:
                 self.log.warning("Commons file %s failed: %s", filename, exc)
+                if exc.status != 404:
+                    failed = exc
                 continue
             if c is not None:
                 out.append(c)
+        if not out and failed is not None:
+            raise failed
         self.log.info("Wikimedia Commons: %d artist image(s) via %s", len(out), qid or "MusicBrainz link")
         return out
